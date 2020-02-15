@@ -1,3 +1,6 @@
+V4 files contain the k-fold cross validation implementation.
+
+
 BASED ON:
 
 # TFMacCpp
