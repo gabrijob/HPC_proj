@@ -20,5 +20,10 @@ add_executable(V2 "")
 
 target_link_libraries(V2 PUBLIC "${TF_LIB}" "${TF_FW_LIB}" "${PROTOBUF_LIB}")
 target_include_directories(V2 PUBLIC "include" "lib")
+##add_subdirectory(${PROJECT_SOURCE_DIR}/src)
 
+add_executable(V4 "")
+
+target_link_libraries(V4 PUBLIC "${TF_LIB}" "${TF_FW_LIB}" "${PROTOBUF_LIB}")
+target_include_directories(V4 PUBLIC "include" "lib")
 add_subdirectory(${PROJECT_SOURCE_DIR}/src)

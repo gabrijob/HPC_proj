@@ -42,7 +42,7 @@ int main(int argc, const char * argv[])
     size_t valid_batches = valid_images.size();
     assert(valid_batches == valid_labels.size());
 
-    int num_epochs = 20;
+    int num_epochs = 2;
     //Epoch / Step loops
     for(int epoch = 0; epoch < num_epochs; epoch++)
     {

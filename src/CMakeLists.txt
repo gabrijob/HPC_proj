@@ -7,3 +7,11 @@ target_sources(V2
 	PUBLIC 
 		${CMAKE_CURRENT_LIST_DIR}/CatDogCNNV2.h
 )
+
+target_sources(V4 
+	PRIVATE 
+		${CMAKE_CURRENT_LIST_DIR}/mainV4.cpp 
+		${CMAKE_CURRENT_LIST_DIR}/CatDogCNNV2.cpp 
+	PUBLIC 
+		${CMAKE_CURRENT_LIST_DIR}/CatDogCNNV2.h
+)

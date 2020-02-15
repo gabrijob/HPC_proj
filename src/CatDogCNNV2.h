@@ -45,6 +45,8 @@ public:
     Status ReadTensorFromImageFile(string& file_name, Tensor& outTensor);
     Status ReadFileTensors(string& folder_name, vector<pair<string, float>> v_folder_label, vector<pair<Tensor, float>>& file_tensors);
     Status ReadBatches(string& folder_name, vector<pair<string, float>> v_folder_label, int batch_size, vector<Tensor>& image_batches, vector<Tensor>& label_batches);
+    Status CreateBatches(vector<pair<Tensor, float>> all_files_tensors, int batch_size, vector<Tensor>& image_batches, vector<Tensor>& label_batches);
+    Status OneBatch(vector<pair<Tensor, float>> file_tensors, vector<pair<Tensor, float>>& stacked_tensors);
     Input XavierInit(Scope scope, int in_chan, int out_chan, int filter_side = 0);
     Input AddConvLayer(string idx, Scope scope, int in_channels, int out_channels, int filter_side, Input input);
     Input AddDenseLayer(string idx, Scope scope, int in_units, int out_units, bool bActivation, Input input);

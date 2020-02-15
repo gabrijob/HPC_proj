@@ -115,6 +115,68 @@ Status CatDogCNN::ReadBatches(string& base_folder_name, vector<pair<string, floa
     return Status::OK();
 }
 
+Status CatDogCNN::CreateBatches(vector<pair<Tensor, float>> all_files_tensors, int batch_size, vector<Tensor>& image_batches, vector<Tensor>& label_batches)
+{
+    auto start_i = all_files_tensors.begin();
+    auto end_i = all_files_tensors.begin()+batch_size;
+    size_t batches = all_files_tensors.size()/batch_size;
+    if(batches*batch_size < all_files_tensors.size())
+        batches++;
+    for(int b = 0; b < batches; b++)
+    {
+        if(end_i > all_files_tensors.end())
+            end_i = all_files_tensors.end();
+        vector<pair<Tensor, float>> one_batch(start_i, end_i);
+        //need to break the pairs
+        vector<Input> one_batch_image, one_batch_lbl;
+        for(auto p: one_batch)
+        {
+            one_batch_image.push_back(Input(p.first));
+            Tensor t(DT_FLOAT, TensorShape({1}));
+            t.scalar<float>()(0) = p.second;
+            one_batch_lbl.push_back(Input(t));
+        }
+        InputList one_batch_inputs(one_batch_image);
+        InputList one_batch_labels(one_batch_lbl);
+        Scope root = Scope::NewRootScope();
+        auto stacked_images = Stack(root, one_batch_inputs);
+        auto stacked_labels = Stack(root, one_batch_labels);
+        TF_CHECK_OK(root.status());
+        ClientSession session(root);
+        vector<Tensor> out_tensors;
+        TF_CHECK_OK(session.Run({}, {stacked_images, stacked_labels}, &out_tensors));
+        image_batches.push_back(out_tensors[0]);
+        label_batches.push_back(out_tensors[1]);
+        start_i = end_i;
+        if(start_i == all_files_tensors.end())
+            break;
+        end_i = start_i+batch_size;
+    }
+    return Status::OK();
+}
+
+Status CatDogCNN::OneBatch(vector<pair<Tensor, float>> file_tensors, vector<pair<Tensor, float>>& stacked_tensors) 
+{
+    for(int b = 0; b < file_tensors.size(); b++) {
+        vector<Input> one_batch_images;
+        vector<float> one_batch_labels;
+        one_batch_images.push_back(Input(file_tensors[b].first));
+        one_batch_labels.push_back(file_tensors[b].second);
+        
+        InputList one_batch_inputs(one_batch_images);
+        Scope root = Scope::NewRootScope();
+        auto stacked_images = Stack(root, one_batch_inputs);
+        TF_CHECK_OK(root.status());
+        ClientSession session(root);
+        vector<Tensor> out_tensor;
+        TF_CHECK_OK(session.Run({}, {stacked_images}, &out_tensor));
+
+        stacked_tensors.push_back(make_pair(out_tensor[0], one_batch_labels[0]));
+        
+    }
+    return Status::OK();
+}
+
 Input CatDogCNN::XavierInit(Scope scope, int in_chan, int out_chan, int filter_side)
 {
     float std;
