@@ -1,4 +1,3 @@
-
 #include <chrono>
 #include "CatDogCNNV2.h"
 #include <omp.h>
@@ -47,111 +46,118 @@ int main(int argc, const char * argv[])
 
     vector<pair<Tensor, float>> train_tensors, validation_tensors, test_tensors;
     
-    int test_idx = k-1, valid_idx = k-2;
+    int test_idx, valid_idx = k-2;
     
     /* CROSS VALIDATION */
-    while (test_idx >= 0) {
-        auto t_begin_cv = high_resolution_clock::now();
+    #pragma omp parallel num_threads(4)
+    {
+        int id, nthr;
+        id = omp_get_thread_num();
+        nthr = omp_get_num_threads();
 
-        for(int i = 0; i < k; i++){
-            if(i == valid_idx) {
-                for(int j=0; j < folds[valid_idx].size(); j++)
-                    validation_tensors.push_back(all_files_tensors[folds[i][j]]);
-            }
-            if(i == test_idx) {
-                for(int j=0; j < folds[test_idx].size(); j++)
-                    test_tensors.push_back(all_files_tensors[folds[i][j]]);
-            }
-            else {
-                for(int j=0; j < folds[i].size(); j++)
-                    train_tensors.push_back(all_files_tensors[folds[i][j]]);
-            }
-        }
-
-        // Create batches for training
-        vector<Tensor> train_images, train_labels, valid_images, valid_labels;
-        s = model.CreateBatches(train_tensors, batch_size, train_images, train_labels);
-        TF_CHECK_OK(s);
-
-        s = model.CreateBatches(validation_tensors, batch_size, valid_images, valid_labels);
-        TF_CHECK_OK(s);
-
-        size_t num_batches = train_images.size();
-        assert(num_batches == train_labels.size());
-        size_t valid_batches = valid_images.size();
-        assert(valid_batches == valid_labels.size());
-
-        int num_epochs = 2; //hyperparameter
-        //Epoch / Step loops
-        for(int epoch = 0; epoch < num_epochs; epoch++)
+        for (test_idx = (k-1) - id; test_idx >= 0; test_idx -= nthr) 
         {
-            /* TRAINING */
-            cout << "Epoch " << epoch+1 << "/" << num_epochs << ":";
-            auto t1 = high_resolution_clock::now();
-            float loss_sum = 0;
-            float accuracy_sum = 0;                
-            for(int b = 0; b < num_batches; b++)
-            {
-                vector<float> results;
-                float loss;
-                float accuracy;
-                s = model.TrainCNN(train_images[b], train_labels[b], results, loss);
-                loss_sum += loss;
-                accuracy = accumulate(results.begin(), results.end(), 0.f) / results.size();
-                accuracy_sum += accuracy;
-                cout << ".";
+            auto t_begin_cv = high_resolution_clock::now();
+
+            for(int i = 0; i < k; i++){
+                if(i == valid_idx) {
+                    for(int j=0; j < folds[valid_idx].size(); j++)
+                        validation_tensors.push_back(all_files_tensors[folds[i][j]]);
+                }
+                if(i == test_idx) {
+                    for(int j=0; j < folds[test_idx].size(); j++)
+                        test_tensors.push_back(all_files_tensors[folds[i][j]]);
+                }
+                else {
+                    for(int j=0; j < folds[i].size(); j++)
+                        train_tensors.push_back(all_files_tensors[folds[i][j]]);
+                }
             }
-            /* VALIDATION */
-            cout << endl << "Validation:";
-            float validation_sum = 0;
-            //#pragma omp parallel for reduction (+:validation_sum)
-                for(int c = 0; c < valid_batches; c++)
+
+            // Create batches for training
+            vector<Tensor> train_images, train_labels, valid_images, valid_labels;
+            s = model.CreateBatches(train_tensors, batch_size, train_images, train_labels);
+            TF_CHECK_OK(s);
+
+            s = model.CreateBatches(validation_tensors, batch_size, valid_images, valid_labels);
+            TF_CHECK_OK(s);
+
+            size_t num_batches = train_images.size();
+            assert(num_batches == train_labels.size());
+            size_t valid_batches = valid_images.size();
+            assert(valid_batches == valid_labels.size());
+
+            int num_epochs = 2; //hyperparameter
+            //Epoch / Step loops
+            for(int epoch = 0; epoch < num_epochs; epoch++)
+            {
+                /* TRAINING */
+                cout << "Epoch " << epoch+1 << "/" << num_epochs << ":";
+                auto t1 = high_resolution_clock::now();
+                float loss_sum = 0;
+                float accuracy_sum = 0;                
+                for(int b = 0; b < num_batches; b++)
                 {
                     vector<float> results;
-                    s = model.ValidateCNN(valid_images[c], valid_labels[c], results);
-                    validation_sum += accumulate(results.begin(), results.end(), 0.f) / results.size();
+                    float loss;
+                    float accuracy;
+                    s = model.TrainCNN(train_images[b], train_labels[b], results, loss);
+                    loss_sum += loss;
+                    accuracy = accumulate(results.begin(), results.end(), 0.f) / results.size();
+                    accuracy_sum += accuracy;
                     cout << ".";
                 }
-            auto t2 = high_resolution_clock::now();
-            cout << endl << "Time: " << duration_cast<seconds>(t2-t1).count() << " seconds ";
-            cout << "Loss: " << loss_sum/num_batches << " Results accuracy: " << accuracy_sum/num_batches << " Validation accuracy: " << validation_sum/valid_batches << endl;
-        }
+                /* VALIDATION */
+                cout << endl << "Validation:";
+                float validation_sum = 0;
+                //#pragma omp parallel for reduction (+:validation_sum)
+                    for(int c = 0; c < valid_batches; c++)
+                    {
+                        vector<float> results;
+                        s = model.ValidateCNN(valid_images[c], valid_labels[c], results);
+                        validation_sum += accumulate(results.begin(), results.end(), 0.f) / results.size();
+                        cout << ".";
+                    }
+                auto t2 = high_resolution_clock::now();
+                cout << endl << "Time: " << duration_cast<seconds>(t2-t1).count() << " seconds ";
+                cout << "Loss: " << loss_sum/num_batches << " Results accuracy: " << accuracy_sum/num_batches << " Validation accuracy: " << validation_sum/valid_batches << endl;
+            }
 
-        /* TESTING */
-        s = model.CreateGraphForImage(false);//rebuild the model without unstacking
-        TF_CHECK_OK(s);
-
-        vector<pair<Tensor,float>> stacked_test_tensors;
-        s = model.OneBatch(test_tensors, stacked_test_tensors);
-        TF_CHECK_OK(s);
-        //test a few images
-        size_t nb_test_files = stacked_test_tensors.size();
-        int count_success = 0;
-        for(int i = 0; i < nb_test_files; i++)
-        {
-            pair<Tensor, float> p = stacked_test_tensors[i];
-            int result;
-            s = model.Predict(p.first, result);
+            /* TESTING */
+            s = model.CreateGraphForImage(false);//rebuild the model without unstacking
             TF_CHECK_OK(s);
-            //cout << "Test number: " << i + 1 << " predicted: " << result << " actual is: " << p.second << endl;
-            if(result == (int)p.second)
-                count_success++;
-        }
-        auto t_end_cv = high_resolution_clock::now();
-        cout << "Total successes: " << count_success << " out of " << nb_test_files << " in " << duration_cast<seconds>(t_end_cv-t_begin_cv).count() << " seconds "<< endl;
 
-        // Update test and valid folds indexes
-        test_idx--;
-        if(valid_idx > 0)
-            valid_idx--;
-        else
-            valid_idx = k-1;
-        
-        // Forget current folds
-        train_tensors.clear();
-        validation_tensors.clear();
-        test_tensors.clear();
-        stacked_test_tensors.clear();   
+            vector<pair<Tensor,float>> stacked_test_tensors;
+            s = model.OneBatch(test_tensors, stacked_test_tensors);
+            TF_CHECK_OK(s);
+            //test a few images
+            size_t nb_test_files = stacked_test_tensors.size();
+            int count_success = 0;
+            for(int i = 0; i < nb_test_files; i++)
+            {
+                pair<Tensor, float> p = stacked_test_tensors[i];
+                int result;
+                s = model.Predict(p.first, result);
+                TF_CHECK_OK(s);
+                //cout << "Test number: " << i + 1 << " predicted: " << result << " actual is: " << p.second << endl;
+                if(result == (int)p.second)
+                    count_success++;
+            }
+            auto t_end_cv = high_resolution_clock::now();
+            cout << "Total successes: " << count_success << " out of " << nb_test_files << " in " << duration_cast<seconds>(t_end_cv-t_begin_cv).count() << " seconds "<< endl;
+
+            // Update test and valid folds indexes
+            if(valid_idx > 0)
+                valid_idx--;
+            else
+                valid_idx = k-1;
+            
+            // Forget current folds
+            train_tensors.clear();
+            validation_tensors.clear();
+            test_tensors.clear();
+            stacked_test_tensors.clear();   
+        }
     }
     return 0;
 }
