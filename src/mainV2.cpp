@@ -14,7 +14,7 @@ int main(int argc, const char * argv[])
     Status s = model.CreateGraphForImage(true);
     TF_CHECK_OK(s);
 
-    string base_folder = "data/cats_and_dogs_small/train";
+    string base_folder = "../data/cats_and_dogs_small/train";
     int batch_size = 20;
     
     vector<Tensor> image_batches, label_batches, valid_images, valid_labels;

@@ -1,6 +1,4 @@
-target_sources(V1 PRIVATE ${CMAKE_CURRENT_LIST_DIR}/mainV1.cpp)
-
-target_sources(V2 
+target_sources(CatDogCNN_simple 
 	PRIVATE 
 		${CMAKE_CURRENT_LIST_DIR}/mainV2.cpp 
 		${CMAKE_CURRENT_LIST_DIR}/CatDogCNNV2.cpp 
@@ -8,7 +6,7 @@ target_sources(V2
 		${CMAKE_CURRENT_LIST_DIR}/CatDogCNNV2.h
 )
 
-target_sources(V4 
+target_sources(CatDogCNN_kfold_cv 
 	PRIVATE 
 		${CMAKE_CURRENT_LIST_DIR}/mainV4.cpp 
 		${CMAKE_CURRENT_LIST_DIR}/CatDogCNNV2.cpp 
