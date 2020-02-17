@@ -1,6 +1,6 @@
 
 #include <chrono>
-#include "CatDogCNNV2.h"
+#include "CatDogCNN.h"
 using namespace std;
 using namespace chrono;
 using namespace tensorflow;

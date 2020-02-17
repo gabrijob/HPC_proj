@@ -1,5 +1,5 @@
 #include <chrono>
-#include "CatDogCNNV2.h"
+#include "CatDogCNN.h"
 #include <omp.h>
 using namespace std;
 using namespace chrono;
@@ -39,7 +39,7 @@ int main(int argc, const char * argv[])
 
     /* CROSS VALIDATION */
     auto t_begin = high_resolution_clock::now();
-    #pragma omp parallel num_threads(4) private(train_tensors, validation_tensors, test_tensors)
+    #pragma omp parallel num_threads(6) private(train_tensors, validation_tensors, test_tensors)
     {
         int id, nthr;
         id = omp_get_thread_num();

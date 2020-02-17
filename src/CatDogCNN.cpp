@@ -29,7 +29,7 @@ Status CatDogCNN::ReadTensorFromImageFile(string& file_name, Tensor& outTensor)
 {
     if(!i_root.ok())
         return i_root.status();
-    if (!absl::EndsWith(file_name, ".jpg") && !absl::EndsWith(file_name, ".jpeg"))
+    if (!str_util::EndsWith(file_name, ".jpg") && !str_util::EndsWith(file_name, ".jpeg"))
     {
         return errors::InvalidArgument("Image must be jpeg encoded");
     }
@@ -115,6 +115,68 @@ Status CatDogCNN::ReadBatches(string& base_folder_name, vector<pair<string, floa
     return Status::OK();
 }
 
+Status CatDogCNN::CreateBatches(vector<pair<Tensor, float>> all_files_tensors, int batch_size, vector<Tensor>& image_batches, vector<Tensor>& label_batches)
+{
+    auto start_i = all_files_tensors.begin();
+    auto end_i = all_files_tensors.begin()+batch_size;
+    size_t batches = all_files_tensors.size()/batch_size;
+    if(batches*batch_size < all_files_tensors.size())
+        batches++;
+    for(int b = 0; b < batches; b++)
+    {
+        if(end_i > all_files_tensors.end())
+            end_i = all_files_tensors.end();
+        vector<pair<Tensor, float>> one_batch(start_i, end_i);
+        //need to break the pairs
+        vector<Input> one_batch_image, one_batch_lbl;
+        for(auto p: one_batch)
+        {
+            one_batch_image.push_back(Input(p.first));
+            Tensor t(DT_FLOAT, TensorShape({1}));
+            t.scalar<float>()(0) = p.second;
+            one_batch_lbl.push_back(Input(t));
+        }
+        InputList one_batch_inputs(one_batch_image);
+        InputList one_batch_labels(one_batch_lbl);
+        Scope root = Scope::NewRootScope();
+        auto stacked_images = Stack(root, one_batch_inputs);
+        auto stacked_labels = Stack(root, one_batch_labels);
+        TF_CHECK_OK(root.status());
+        ClientSession session(root);
+        vector<Tensor> out_tensors;
+        TF_CHECK_OK(session.Run({}, {stacked_images, stacked_labels}, &out_tensors));
+        image_batches.push_back(out_tensors[0]);
+        label_batches.push_back(out_tensors[1]);
+        start_i = end_i;
+        if(start_i == all_files_tensors.end())
+            break;
+        end_i = start_i+batch_size;
+    }
+    return Status::OK();
+}
+
+Status CatDogCNN::OneBatch(vector<pair<Tensor, float>> file_tensors, vector<pair<Tensor, float>>& stacked_tensors) 
+{
+    for(int b = 0; b < file_tensors.size(); b++) {
+        vector<Input> one_batch_images;
+        vector<float> one_batch_labels;
+        one_batch_images.push_back(Input(file_tensors[b].first));
+        one_batch_labels.push_back(file_tensors[b].second);
+        
+        InputList one_batch_inputs(one_batch_images);
+        Scope root = Scope::NewRootScope();
+        auto stacked_images = Stack(root, one_batch_inputs);
+        TF_CHECK_OK(root.status());
+        ClientSession session(root);
+        vector<Tensor> out_tensor;
+        TF_CHECK_OK(session.Run({}, {stacked_images}, &out_tensor));
+
+        stacked_tensors.push_back(make_pair(out_tensor[0], one_batch_labels[0]));
+        
+    }
+    return Status::OK();
+}
+
 Input CatDogCNN::XavierInit(Scope scope, int in_chan, int out_chan, int filter_side)
 {
     float std;
@@ -179,9 +241,9 @@ Input CatDogCNN::AddDenseLayer(string idx, Scope scope, int in_units, int out_un
 Status CatDogCNN::CreateGraphForCNN(int filter_side)
 {
     //input image is batch_sizex150x150x3
-    input_batch_var = Placeholder(t_root.WithOpName(input_name), DT_FLOAT);
-    drop_rate_var = Placeholder(t_root.WithOpName(drop_rate_name), DT_FLOAT);//see class member for help
-    skip_drop_var = Placeholder(t_root.WithOpName(skip_drop_name), DT_FLOAT);//see class member for help
+    input_batch_var = Placeholder(t_root.WithOpName("input"), DT_FLOAT);
+    drop_rate_var = Placeholder(t_root.WithOpName("drop_rate"), DT_FLOAT);//see class member for help
+    skip_drop_var = Placeholder(t_root.WithOpName("skip_drop"), DT_FLOAT);//see class member for help
     
     //Start Conv+Maxpool No 1. filter size 3x3x3 and we have 32 filters
     Scope scope_conv1 = t_root.NewSubScope("Conv1_layer");
@@ -241,7 +303,7 @@ Status CatDogCNN::CreateGraphForCNN(int filter_side)
     Scope scope_dense3 = t_root.NewSubScope("Dense3_layer");
     auto logits = AddDenseLayer("7", scope_dense3, in_units, out_units, false, relu6);
 
-    out_classification = Sigmoid(t_root.WithOpName(out_name), logits);
+    out_classification = Sigmoid(t_root.WithOpName("Output_Classes"), logits);
     return t_root.status();
 }
 
@@ -251,10 +313,11 @@ Status CatDogCNN::CreateOptimizationGraph(float learning_rate)
     Scope scope_loss = t_root.NewSubScope("Loss_scope");
     out_loss_var = Mean(scope_loss.WithOpName("Loss"), SquaredDifference(scope_loss, out_classification, input_labels_var), {0});
     TF_CHECK_OK(scope_loss.status());
+    vector<Output> weights_biases;
     for(pair<string, Output> i: m_vars)
-        v_weights_biases.push_back(i.second);
+        weights_biases.push_back(i.second);
     vector<Output> grad_outputs;
-    TF_CHECK_OK(AddSymbolicGradients(t_root, {out_loss_var}, v_weights_biases, &grad_outputs));
+    TF_CHECK_OK(AddSymbolicGradients(t_root, {out_loss_var}, weights_biases, &grad_outputs));
     int index = 0;
     for(pair<string, Output> i: m_vars)
     {
@@ -282,11 +345,11 @@ Status CatDogCNN::Initialize()
         ops_to_run.push_back(i.second);
     t_session = unique_ptr<ClientSession>(new ClientSession(t_root));
     TF_CHECK_OK(t_session->Run(ops_to_run, nullptr));
-    /* uncomment if you want visualization of the model graph
+    /*
     GraphDef graph;
     TF_RETURN_IF_ERROR(t_root.ToGraphDef(&graph));
     SummaryWriterInterface* w;
-    TF_CHECK_OK(CreateSummaryFileWriter(1, 0, "/Users/bennyfriedman/Code/TF2example/TF2example/graphs", ".cnn-graph", Env::Default(), &w));
+    TF_CHECK_OK(CreateSummaryFileWriter(1, 0, "graphs/", ".cnn-graph", Env::Default(), &w));
     TF_CHECK_OK(w->WriteGraph(0, make_unique<GraphDef>(graph)));
     */
     return Status::OK();
@@ -335,168 +398,6 @@ Status CatDogCNN::Predict(Tensor& image, int& result)
     TF_CHECK_OK(t_session->Run({{input_batch_var, image}, {drop_rate_var, 1.f}, {skip_drop_var, 1.f}}, {out_classification}, &out_tensors));
     auto mat = out_tensors[0].matrix<float>();
     result = (mat(0, 0) > 0.5f)? 1 : 0;
-    return Status::OK();
-}
-
-Status CatDogCNN::FreezeSave(string& file_name)
-{
-    vector<Tensor> out_tensors;
-    //Extract: current weights and biases current values
-    TF_CHECK_OK(t_session->Run(v_weights_biases , &out_tensors));
-    unordered_map<string, Tensor> variable_to_value_map;
-    int idx = 0;
-    for(Output o: v_weights_biases)
-    {
-        variable_to_value_map[o.node()->name()] = out_tensors[idx];
-        idx++;
-    }
-    GraphDef graph_def;
-    TF_CHECK_OK(t_root.ToGraphDef(&graph_def));
-    //call the utility function (modified)
-    SavedModelBundle saved_model_bundle;
-    SignatureDef signature_def;
-    (*signature_def.mutable_inputs())[input_batch_var.name()].set_name(input_batch_var.name());
-    (*signature_def.mutable_outputs())[out_classification.name()].set_name(out_classification.name());
-    MetaGraphDef* meta_graph_def = &saved_model_bundle.meta_graph_def;
-    (*meta_graph_def->mutable_signature_def())["signature_def"] = signature_def;
-    *meta_graph_def->mutable_graph_def() = graph_def;
-    SessionOptions session_options;
-    saved_model_bundle.session.reset(NewSession(session_options));//even though we will not use it
-    GraphDef frozen_graph_def;
-    std::unordered_set<string> inputs;
-    std::unordered_set<string> outputs;
-    TF_CHECK_OK(FreezeSavedModel(saved_model_bundle, variable_to_value_map, &frozen_graph_def, &inputs, &outputs));
-
-    //write to file
-    return WriteBinaryProto(Env::Default(), file_name, frozen_graph_def);
-}
-
-Status CatDogCNN::LoadSavedModel(string& file_name)
-{
-    std::unique_ptr<GraphDef> graph_def;
-    SessionOptions options;
-    f_session.reset(NewSession(options));
-    graph_def.reset(new GraphDef());
-    TF_CHECK_OK(ReadBinaryProto(Env::Default(), file_name, graph_def.get()));
-    return f_session->Create(*graph_def.get());
-}
-
-Status CatDogCNN::PredictFromFrozen(Tensor& image, int& result)
-{
-    vector<Tensor> out_tensors;
-    Tensor t(DT_FLOAT, TensorShape({1}));
-    t.scalar<float>()(0) = 1.f;
-    //Inputs: image, drop rate 1 and skip drop.
-    TF_CHECK_OK(f_session->Run({{input_name, image}, {drop_rate_name, t}, {skip_drop_name, t}}, {out_name}, {}, &out_tensors));
-    auto mat = out_tensors[0].matrix<float>();
-    result = (mat(0, 0) > 0.5f)? 1 : 0;
-    return Status::OK();
-}
-
-InputList CatDogCNN::MakeTransforms(int batch_size, Input a0, Input a1, Input a2, Input b0, Input b1, Input b2)
-{
-    vector<Input> v_transforms;
-    v_transforms.push_back(Reshape(a_root, a0, {batch_size, 1}));
-    v_transforms.push_back(Reshape(a_root, a1, {batch_size, 1}));
-    v_transforms.push_back(Reshape(a_root, a2, {batch_size, 1}));
-    v_transforms.push_back(Reshape(a_root, b0, {batch_size, 1}));
-    v_transforms.push_back(Reshape(a_root, b1, {batch_size, 1}));
-    v_transforms.push_back(Reshape(a_root, b2, {batch_size, 1}));
-    v_transforms.push_back(Input::Initializer(0.f, {batch_size, 2}));
-    InputList inp_transforms(v_transforms);
-    return inp_transforms;
-}
-
-Status CatDogCNN::CreateAugmentGraph(int batch_size, int image_side, float flip_chances, float max_angles, float scale_shift_factor)
-{
-    aug_tensor_input = Placeholder(a_root.WithOpName("input"), DT_FLOAT);
-    //Do scale and shift
-    Output shifted_images;
-    if(scale_shift_factor)
-    {
-        auto rand1 = RandomUniform(a_root, {batch_size, 1}, DT_FLOAT);
-        auto rand2 = RandomUniform(a_root, {batch_size, 1}, DT_FLOAT);
-        auto rand3 = RandomUniform(a_root, {batch_size, 1}, DT_FLOAT);
-        auto rand4 = RandomUniform(a_root, {batch_size, 1}, DT_FLOAT);
-        auto rand_shift1 = Sub(a_root, Mul(a_root, rand1, scale_shift_factor*2*image_side), scale_shift_factor*image_side);
-        auto rand_shift2 = Sub(a_root, Mul(a_root, rand2, scale_shift_factor*2*image_side), scale_shift_factor*image_side);
-        auto rand_scale1 = Add(a_root, Mul(a_root, rand3, scale_shift_factor*2), 1-scale_shift_factor);
-        auto rand_scale2 = Add(a_root, Mul(a_root, rand4, scale_shift_factor*2), 1-scale_shift_factor);
-        Input::Initializer zeros(0.f, {batch_size, 1});
-        auto transforms = Concat(a_root, MakeTransforms(batch_size, rand_scale1, zeros, rand_shift1, zeros, rand_scale2, rand_shift2), Input::Initializer(1, {}));
-        shifted_images = ImageProjectiveTransform(a_root, aug_tensor_input, transforms, "BILINEAR");
-    }
-    else
-        shifted_images = Identity(a_root, aug_tensor_input);
-    
-    // do flips
-    Output fliped_images;
-    if(flip_chances)
-    {
-        auto rand5 = RandomUniform(a_root, {batch_size}, DT_FLOAT);
-        auto flips_vector = Floor(a_root, Add(a_root, rand5, flip_chances));
-        auto flips_tensor = Cast(a_root, Reshape(a_root, flips_vector, {batch_size, 1, 1, 1}), DT_FLOAT);
-        auto reverses = Reverse(a_root, shifted_images, {2}); // right to left
-        auto tensors_reversed = Mul(a_root, reverses, flips_tensor);
-        auto tensors_normal = Mul(a_root, shifted_images, Sub(a_root, 1.f, flips_tensor));
-        fliped_images = Add(a_root, tensors_reversed, tensors_normal);
-    }
-    else
-        fliped_images = Identity(a_root, aug_tensor_input);
-    
-    // do rotations
-    if(max_angles)
-    {
-        auto rand6 = RandomUniform(a_root, {batch_size}, DT_FLOAT);
-        auto angles = Mul(a_root, Sub(a_root, rand6, 0.5f), max_angles*2);
-        auto rand_angles = Div(a_root, Mul(a_root, angles, (float)M_PI), 180.f);
-        auto sins = Sin(a_root, rand_angles);
-        auto m_sins = Mul(a_root, sins, -1.f);
-        auto coss = Cos(a_root, rand_angles);
-        float img_side_1 = image_side - 1;
-        auto x_offset = Div(a_root, Sub(a_root, img_side_1, Sub(a_root, Mul(a_root, coss, img_side_1), Mul(a_root, sins, img_side_1))), 2.f);
-        auto y_offset = Div(a_root, Sub(a_root, img_side_1, Add(a_root, Mul(a_root, sins, img_side_1), Mul(a_root, coss, img_side_1))), 2.f);
-        auto transforms = Concat(a_root, MakeTransforms(batch_size, coss, m_sins, x_offset, sins, coss, y_offset), Input::Initializer(1, {}));
-        aug_tensor_output = ImageProjectiveTransform(a_root, fliped_images, transforms, "BILINEAR");
-    }
-    else
-        aug_tensor_output = Identity(a_root, fliped_images);
-    return a_root.status();
-}
-
-Status CatDogCNN::RandomAugmentBatch(Tensor& image_batch, Tensor& augmented_batch)
-{
-    TF_CHECK_OK(a_root.status());
-    ClientSession session(a_root);
-    vector<Tensor> out_tensors;
-    TF_CHECK_OK(session.Run({{aug_tensor_input, image_batch}}, {aug_tensor_output}, &out_tensors));
-    augmented_batch = out_tensors[0];
-    return Status::OK();
-}
-
-Status CatDogCNN::WriteBatchToImageFiles(Tensor& image_batch, string folder_name, string image_name)
-{
-    Scope root = Scope::NewRootScope();
-    auto unormalized = Multiply(root, image_batch, 255.f);
-    auto cast = Cast(root, unormalized, DT_UINT8);
-    auto image_list = Unstack(root, cast, image_batch.dim_size(0));
-    size_t num = image_list.output.size();
-    vector<Output> images;
-    for(int i = 0; i < num; i++)
-        images.push_back(EncodeJpeg(root, image_list.output[i]));
-    
-    TF_CHECK_OK(root.status());
-    ClientSession session(root);
-    vector<Tensor> out_tensors;
-    TF_CHECK_OK(session.Run({}, {images}, &out_tensors));
-
-    for(int i = 0; i < num; i++)
-    {
-        string i_name = image_name + to_string(i) + ".jpg";
-        string i_fullpath = io::JoinPath(folder_name, i_name);
-        ofstream fs(i_fullpath, ios::binary);
-        fs << out_tensors[i].scalar<string>()();
-    }
     return Status::OK();
 }
 
